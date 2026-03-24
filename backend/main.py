@@ -77,24 +77,32 @@ async def websocket_endpoint(ws: WebSocket, user: str):
 
             cleanup()
 
-            # 💾 SAVE
             conn = get_db()
             c = conn.cursor()
+
             c.execute(
                 "INSERT INTO messages (sender, receiver, msg, time) VALUES (?, ?, ?, ?)",
                 (s, r, m, t)
             )
+            msg_id = c.lastrowid
+
             conn.commit()
             conn.close()
 
-            # ⚡ SEND TO RECEIVER
+            payload = {
+                "id": msg_id,
+                "s": s,
+                "m": m,
+                "t": t
+            }
+
+            # 🔥 SEND TO RECEIVER
             if r in clients:
-                await clients[r].send_json({
-                    "id": None,
-                    "s": s,
-                    "m": m,
-                    "t": t
-                })
+                await clients[r].send_json(payload)
+
+            # 🔥 ALSO SEND BACK TO SENDER (IMPORTANT FIX)
+            if s in clients:
+                await clients[s].send_json(payload)
 
     except WebSocketDisconnect:
         clients.pop(user, None)
