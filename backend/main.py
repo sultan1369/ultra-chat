@@ -4,6 +4,7 @@ import sqlite3, time, os
 
 app = FastAPI()
 
+# 🌐 CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -11,12 +12,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-clients = {}
+# 🔥 MULTI-CONNECTION SUPPORT (important fix)
+clients = {}  # { user: [ws1, ws2] }
+
 DB = "chat.db"
 
+
+# 🔌 DB CONNECT
 def get_db():
     return sqlite3.connect(DB, check_same_thread=False)
 
+
+# 🏗 INIT DB
 def init_db():
     conn = get_db()
     c = conn.cursor()
@@ -31,35 +38,52 @@ def init_db():
     )
     """)
 
+    # 🔥 INDEXES (speed boost)
+    c.execute("CREATE INDEX IF NOT EXISTS idx_user ON messages(sender, receiver)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_time ON messages(time)")
+
     conn.commit()
     conn.close()
+
 
 init_db()
 
+
+# 🧹 CLEAN OLD DATA (5 HOURS)
 def cleanup():
     conn = get_db()
     c = conn.cursor()
-    c.execute("DELETE FROM messages WHERE time < ?", (int(time.time()) - 18000,))
+
+    expiry = int(time.time()) - 18000
+    c.execute("DELETE FROM messages WHERE time < ?", (expiry,))
+
     conn.commit()
     conn.close()
 
-# 🔥 WEBSOCKET (REAL-TIME)
+
+# 📡 WEBSOCKET (REAL-TIME)
 @app.websocket("/ws/{user}")
 async def websocket_endpoint(ws: WebSocket, user: str):
+
     await ws.accept()
-    clients[user] = ws
+
+    # ✅ support multiple devices per user
+    if user not in clients:
+        clients[user] = []
+    clients[user].append(ws)
 
     try:
         while True:
             data = await ws.receive_json()
 
-            s = data["s"]
-            r = data["r"]
-            m = data["m"][:40]
+            s = data.get("s")
+            r = data.get("r")
+            m = data.get("m", "")[:40]
             t = int(time.time())
 
             cleanup()
 
+            # 💾 STORE MESSAGE
             conn = get_db()
             c = conn.cursor()
 
@@ -79,17 +103,23 @@ async def websocket_endpoint(ws: WebSocket, user: str):
                 "t": t
             }
 
-            # ✅ SEND TO BOTH USERS
-            if s in clients:
-                await clients[s].send_json(payload)
-
-            if r in clients:
-                await clients[r].send_json(payload)
+            # 🔥 SEND TO BOTH USERS (ALL DEVICES)
+            for u in [s, r]:
+                if u in clients:
+                    for client in clients[u]:
+                        try:
+                            await client.send_json(payload)
+                        except:
+                            pass  # ignore broken connections
 
     except WebSocketDisconnect:
-        clients.pop(user, None)
+        if user in clients:
+            clients[user].remove(ws)
+            if not clients[user]:
+                del clients[user]
 
-# 🔥 OFFLINE SYNC
+
+# 🔄 OFFLINE SYNC (BACKUP)
 @app.get("/sync/{user}/{last_id}")
 def sync(user: str, last_id: int):
 
@@ -100,6 +130,7 @@ def sync(user: str, last_id: int):
         SELECT id, sender, msg, time
         FROM messages
         WHERE id > ? AND (sender=? OR receiver=?)
+        ORDER BY id ASC
     """, (last_id, user, user))
 
     data = c.fetchall()
@@ -107,12 +138,14 @@ def sync(user: str, last_id: int):
 
     return data
 
-# ❤️ HEALTH
+
+# ❤️ HEALTH CHECK
 @app.get("/")
 def home():
     return {"status": "running"}
 
-# 🚀 RUN
+
+# 🚀 RUN SERVER
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 10000))
