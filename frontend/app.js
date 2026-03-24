@@ -2,31 +2,44 @@ const API = "https://ultra-chat-backend-4ka5.onrender.com";
 
 // 🔄 STATE
 let lastId = 0;
-let interval = 3000;
+let interval = 5000;
 let queue = [];
+let isHidden = false;
+let isInitialLoad = true; // 🔥 NEW
 
-// 🔔 REQUEST NOTIFICATION PERMISSION (ON USER CLICK)
+// 🔔 PERMISSION + AUDIO UNLOCK
 document.body.addEventListener("click", () => {
   if ("Notification" in window && Notification.permission !== "granted") {
     Notification.requestPermission();
   }
 
-  // 🔊 unlock audio (important for mobile)
   const audio = document.getElementById("ping");
   if (audio) {
     audio.play().then(() => audio.pause()).catch(() => {});
   }
 }, { once: true });
 
-// 🔥 REGISTER SERVICE WORKER
+// 🔥 SERVICE WORKER
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("sw.js");
 }
 
-// 🔔 PRIVACY NOTIFICATION
-function notify() {
-  if (Notification.permission === "granted") {
-    new Notification("New Message");
+// 🔍 BACKGROUND STATE
+document.addEventListener("visibilitychange", () => {
+  isHidden = document.hidden;
+});
+
+// 🔔 NOTIFICATION
+function notifySW() {
+  if (navigator.serviceWorker && Notification.permission === "granted") {
+    navigator.serviceWorker.ready.then(reg => {
+      reg.showNotification("New Message", {
+        body: "You have a new message",
+        tag: "msg",
+        renotify: true,
+        vibrate: [200, 100, 200]
+      });
+    });
   }
 }
 
@@ -36,7 +49,7 @@ function playSound() {
   if (audio) audio.play().catch(() => {});
 }
 
-// 📤 SEND MESSAGE (WITH OFFLINE QUEUE)
+// 📤 SEND
 function send() {
   const user = document.getElementById("user").value;
   const msgInput = document.getElementById("msg");
@@ -51,15 +64,13 @@ function send() {
     t: Math.floor(Date.now() / 1000)
   };
 
-  // add to queue
   queue.push(data);
-
   msgInput.value = "";
 
   trySendQueue();
 }
 
-// 🔁 SEND QUEUE (LOW NETWORK SAFE)
+// 🔁 QUEUE SEND
 function trySendQueue() {
   if (!navigator.onLine || queue.length === 0) return;
 
@@ -79,28 +90,39 @@ function trySendQueue() {
   .catch(() => {});
 }
 
-// 📥 FETCH MESSAGES (FIXED INITIAL LOAD)
+// 📥 FETCH
 function fetchMessages() {
   const user = document.getElementById("user").value;
 
-  const startId = lastId === 0 ? -1 : lastId;
+  const startId = isInitialLoad ? -1 : lastId;
 
   fetch(`${API}/r/${user}/${startId}`)
     .then(res => res.ok ? res.json() : [])
     .then(data => {
 
-      data.forEach(m => {
-        lastId = m[0];
-        render(m);
+      if (isInitialLoad) {
+        // 🔥 FAST LOAD ALL MESSAGES
+        document.getElementById("chat").innerHTML = "";
 
-        // 🔔 notify only if message from other user
-        if (m[1] !== user) {
-          playSound();
-          notify();
-        }
-      });
+        data.forEach(m => {
+          lastId = m[0];
+          render(m);
+        });
 
-      // 🔄 adaptive polling
+        isInitialLoad = false;
+      } else {
+        // 🔵 LIVE MODE
+        data.forEach(m => {
+          lastId = m[0];
+          render(m);
+
+          if (m[1] !== user) {
+            playSound();
+            if (isHidden) notifySW();
+          }
+        });
+      }
+
       interval = data.length > 0 ? 3000 : 8000;
 
       trySendQueue();
@@ -112,7 +134,7 @@ function fetchMessages() {
     });
 }
 
-// 🧱 RENDER MESSAGE (LEFT/RIGHT)
+// 🧱 RENDER
 function render(m) {
   const chat = document.getElementById("chat");
   const current = document.getElementById("user").value;
@@ -138,14 +160,15 @@ function render(m) {
   chat.scrollTop = chat.scrollHeight;
 }
 
-// 🔄 RESET WHEN USER CHANGES
+// 🔄 USER SWITCH FIX
 document.getElementById("user").addEventListener("change", () => {
   lastId = 0;
+  isInitialLoad = true; // 🔥 important
   document.getElementById("chat").innerHTML = "";
 });
 
 // 📶 NETWORK RECOVERY
 window.addEventListener("online", trySendQueue);
 
-// 🚀 START APP
+// 🚀 START
 fetchMessages();
