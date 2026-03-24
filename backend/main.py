@@ -6,30 +6,28 @@ import os
 
 app = FastAPI()
 
-# ✅ CORS (allow frontend)
+# ✅ CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # you can restrict later
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ✅ MODEL (ultra small payload)
+# ✅ MODEL
 class Message(BaseModel):
-    s: str  # sender
-    r: str  # receiver
-    m: str  # message
-    t: int  # timestamp
+    s: str
+    r: str
+    m: str
+    t: int
 
 
-# ✅ DB PATH (Render safe)
-DB_PATH = "chat.db"
+DB = "chat.db"
 
-
-# ✅ INIT DB (auto run)
+# ✅ INIT DB
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB)
     c = conn.cursor()
 
     c.execute("""
@@ -47,13 +45,11 @@ def init_db():
 
 init_db()
 
-
-# ✅ DB CONNECTION HELPER (important)
 def get_db():
-    return sqlite3.connect(DB_PATH)
+    return sqlite3.connect(DB)
 
 
-# ✅ SEND MESSAGE
+# ✅ SEND
 @app.post("/s")
 def send(msg: Message):
     conn = get_db()
@@ -61,7 +57,7 @@ def send(msg: Message):
 
     c.execute(
         "INSERT INTO messages (sender, receiver, msg, time) VALUES (?, ?, ?, ?)",
-        (msg.s, msg.r, msg.m, msg.t)
+        (msg.s, msg.r, msg.m[:50], msg.t)  # limit size 🔥
     )
 
     conn.commit()
@@ -70,15 +66,15 @@ def send(msg: Message):
     return {"ok": 1}
 
 
-# ✅ RECEIVE MESSAGES
-@app.get("/r/{user}")
-def receive(user: str):
+# ✅ RECEIVE ONLY NEW MESSAGES
+@app.get("/r/{user}/{last_id}")
+def receive(user: str, last_id: int):
     conn = get_db()
     c = conn.cursor()
 
     c.execute(
-        "SELECT sender, msg, time FROM messages WHERE receiver=?",
-        (user,)
+        "SELECT id, sender, msg, time FROM messages WHERE receiver=? AND id>?",
+        (user, last_id)
     )
 
     data = c.fetchall()
@@ -87,13 +83,12 @@ def receive(user: str):
     return data
 
 
-# ✅ ROOT (health check)
 @app.get("/")
 def home():
     return {"status": "running"}
 
 
-# ✅ RENDER PORT HANDLING
+# ✅ RENDER PORT
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 10000))
