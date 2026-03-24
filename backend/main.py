@@ -1,39 +1,29 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import sqlite3
-import time
-import os
+import sqlite3, time, os
 
 app = FastAPI()
 
-# ✅ CORS (allow frontend)
+# ✅ CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ✅ MODEL (ultra-light payload)
-class Message(BaseModel):
-    s: str  # sender
-    r: str  # receiver
-    m: str  # message
-    t: int  # timestamp
+# 🔥 ACTIVE CLIENTS (REAL-TIME)
+clients = {}
 
-
-# ✅ DATABASE FILE
+# ✅ DB FILE
 DB = "chat.db"
 
-
-# ✅ GET DB CONNECTION (thread-safe)
+# ✅ DB CONNECT
 def get_db():
     return sqlite3.connect(DB, check_same_thread=False)
 
-
-# ✅ INIT DATABASE
+# ✅ INIT DB
 def init_db():
     conn = get_db()
     c = conn.cursor()
@@ -48,32 +38,76 @@ def init_db():
     )
     """)
 
-    # 🔥 INDEX for faster low-network queries
+    # 🔥 INDEX FOR SPEED
     c.execute("CREATE INDEX IF NOT EXISTS idx_receiver ON messages(receiver)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_time ON messages(time)")
 
     conn.commit()
     conn.close()
 
-
 init_db()
 
-
-# 🔥 AUTO DELETE (older than 5 hours)
+# 🔥 AUTO DELETE (5 HOURS)
 def cleanup():
     conn = get_db()
     c = conn.cursor()
 
-    now = int(time.time())
-    expiry = now - 18000  # 5 hours
-
+    expiry = int(time.time()) - 18000
     c.execute("DELETE FROM messages WHERE time < ?", (expiry,))
 
     conn.commit()
     conn.close()
 
+# =========================
+# 📡 WEBSOCKET (REAL-TIME)
+# =========================
+@app.websocket("/ws/{user}")
+async def websocket_endpoint(ws: WebSocket, user: str):
+    await ws.accept()
+    clients[user] = ws
 
-# ✅ SEND MESSAGE
+    try:
+        while True:
+            data = await ws.receive_json()
+
+            s = data["s"]
+            r = data["r"]
+            m = data["m"][:40]
+            t = int(time.time())
+
+            cleanup()
+
+            # 💾 SAVE
+            conn = get_db()
+            c = conn.cursor()
+            c.execute(
+                "INSERT INTO messages (sender, receiver, msg, time) VALUES (?, ?, ?, ?)",
+                (s, r, m, t)
+            )
+            conn.commit()
+            conn.close()
+
+            # ⚡ SEND TO RECEIVER
+            if r in clients:
+                await clients[r].send_json({
+                    "id": None,
+                    "s": s,
+                    "m": m,
+                    "t": t
+                })
+
+    except WebSocketDisconnect:
+        clients.pop(user, None)
+
+# =========================
+# 📤 HTTP SEND (BACKUP)
+# =========================
+class Message(BaseModel):
+    s: str
+    r: str
+    m: str
+    t: int
+
 @app.post("/s")
 def send(msg: Message):
     cleanup()
@@ -83,7 +117,7 @@ def send(msg: Message):
 
     c.execute(
         "INSERT INTO messages (sender, receiver, msg, time) VALUES (?, ?, ?, ?)",
-        (msg.s, msg.r, msg.m[:40], msg.t)  # limit size 🔥
+        (msg.s, msg.r, msg.m[:40], msg.t)
     )
 
     conn.commit()
@@ -91,8 +125,9 @@ def send(msg: Message):
 
     return {"ok": 1}
 
-
-# ✅ RECEIVE ONLY NEW MESSAGES (LOW DATA)
+# =========================
+# 📥 FETCH (OPTIONAL BACKUP)
+# =========================
 @app.get("/r/{user}/{last_id}")
 def receive(user: str, last_id: int):
     cleanup()
@@ -100,28 +135,27 @@ def receive(user: str, last_id: int):
     conn = get_db()
     c = conn.cursor()
 
-    c.execute(
-        """
-        SELECT id, sender, msg, time 
-        FROM messages 
-        WHERE id > ? AND (sender = ? OR receiver = ?)
-        """,
-        (last_id, user, user)
-    )
+    c.execute("""
+        SELECT id, sender, msg, time
+        FROM messages
+        WHERE id > ? AND (sender=? OR receiver=?)
+    """, (last_id, user, user))
 
     data = c.fetchall()
     conn.close()
 
     return data
 
-
-# ✅ HEALTH CHECK
+# =========================
+# ❤️ HEALTH
+# =========================
 @app.get("/")
 def home():
     return {"status": "running"}
 
-
-# ✅ RENDER COMPATIBLE RUN
+# =========================
+# 🚀 RUN (RENDER)
+# =========================
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 10000))
