@@ -1,11 +1,9 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 import sqlite3, time, os
 
 app = FastAPI()
 
-# ✅ CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -13,17 +11,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 🔥 ACTIVE CLIENTS (REAL-TIME)
 clients = {}
-
-# ✅ DB FILE
 DB = "chat.db"
 
-# ✅ DB CONNECT
 def get_db():
     return sqlite3.connect(DB, check_same_thread=False)
 
-# ✅ INIT DB
 def init_db():
     conn = get_db()
     c = conn.cursor()
@@ -38,29 +31,19 @@ def init_db():
     )
     """)
 
-    # 🔥 INDEX FOR SPEED
-    c.execute("CREATE INDEX IF NOT EXISTS idx_receiver ON messages(receiver)")
-    c.execute("CREATE INDEX IF NOT EXISTS idx_time ON messages(time)")
-
     conn.commit()
     conn.close()
 
 init_db()
 
-# 🔥 AUTO DELETE (5 HOURS)
 def cleanup():
     conn = get_db()
     c = conn.cursor()
-
-    expiry = int(time.time()) - 18000
-    c.execute("DELETE FROM messages WHERE time < ?", (expiry,))
-
+    c.execute("DELETE FROM messages WHERE time < ?", (int(time.time()) - 18000,))
     conn.commit()
     conn.close()
 
-# =========================
-# 📡 WEBSOCKET (REAL-TIME)
-# =========================
+# 🔥 WEBSOCKET (REAL-TIME)
 @app.websocket("/ws/{user}")
 async def websocket_endpoint(ws: WebSocket, user: str):
     await ws.accept()
@@ -84,8 +67,8 @@ async def websocket_endpoint(ws: WebSocket, user: str):
                 "INSERT INTO messages (sender, receiver, msg, time) VALUES (?, ?, ?, ?)",
                 (s, r, m, t)
             )
-            msg_id = c.lastrowid
 
+            msg_id = c.lastrowid
             conn.commit()
             conn.close()
 
@@ -96,49 +79,19 @@ async def websocket_endpoint(ws: WebSocket, user: str):
                 "t": t
             }
 
-            # 🔥 SEND TO RECEIVER
-            if r in clients:
-                await clients[r].send_json(payload)
-
-            # 🔥 ALSO SEND BACK TO SENDER (IMPORTANT FIX)
+            # ✅ SEND TO BOTH USERS
             if s in clients:
                 await clients[s].send_json(payload)
+
+            if r in clients:
+                await clients[r].send_json(payload)
 
     except WebSocketDisconnect:
         clients.pop(user, None)
 
-# =========================
-# 📤 HTTP SEND (BACKUP)
-# =========================
-class Message(BaseModel):
-    s: str
-    r: str
-    m: str
-    t: int
-
-@app.post("/s")
-def send(msg: Message):
-    cleanup()
-
-    conn = get_db()
-    c = conn.cursor()
-
-    c.execute(
-        "INSERT INTO messages (sender, receiver, msg, time) VALUES (?, ?, ?, ?)",
-        (msg.s, msg.r, msg.m[:40], msg.t)
-    )
-
-    conn.commit()
-    conn.close()
-
-    return {"ok": 1}
-
-# =========================
-# 📥 FETCH (OPTIONAL BACKUP)
-# =========================
-@app.get("/r/{user}/{last_id}")
-def receive(user: str, last_id: int):
-    cleanup()
+# 🔥 OFFLINE SYNC
+@app.get("/sync/{user}/{last_id}")
+def sync(user: str, last_id: int):
 
     conn = get_db()
     c = conn.cursor()
@@ -154,16 +107,12 @@ def receive(user: str, last_id: int):
 
     return data
 
-# =========================
 # ❤️ HEALTH
-# =========================
 @app.get("/")
 def home():
     return {"status": "running"}
 
-# =========================
-# 🚀 RUN (RENDER)
-# =========================
+# 🚀 RUN
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 10000))
