@@ -1,4 +1,4 @@
-const API = "https://ultra-chat-frontend.onrender.com";
+const API = "https://ultra-chat-backend-4ka5.onrender.com";
 
 // SEND MESSAGE
 function send() {
