@@ -1,26 +1,29 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Ultra Chat</title>
-  <link rel="stylesheet" href="style.css">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<meta name="theme-color" content="#2563eb">
+<link rel="stylesheet" href="style.css">
+<title>Ultra Chat</title>
 </head>
 <body>
 
 <div class="topBar">
-  <select id="user">
-    <option value="S">User S</option>
-    <option value="F">User F</option>
-  </select>
+<select id="user">
+<option value="S">User S</option>
+<option value="F">User F</option>
+</select>
 </div>
 
 <div id="chatContainer">
-  <div id="chat"></div>
+<div id="chat"></div>
 </div>
 
 <div class="inputBox">
-  <input id="msg" placeholder="Type message..." />
-  <button onclick="send()">Send</button>
+<input id="msg" placeholder="Type..." />
+<button onclick="send()">Send</button>
 </div>
 
 <audio id="ping" src="https://www.soundjay.com/buttons/sounds/button-3.mp3"></audio>

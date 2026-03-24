@@ -2,11 +2,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import sqlite3
+import time
 import os
 
 app = FastAPI()
 
-# ✅ CORS
+# ✅ CORS (allow frontend)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -15,19 +16,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ MODEL
+# ✅ MODEL (ultra-light payload)
 class Message(BaseModel):
-    s: str
-    r: str
-    m: str
-    t: int
+    s: str  # sender
+    r: str  # receiver
+    m: str  # message
+    t: int  # timestamp
 
 
+# ✅ DATABASE FILE
 DB = "chat.db"
 
-# ✅ INIT DB
+
+# ✅ GET DB CONNECTION (thread-safe)
+def get_db():
+    return sqlite3.connect(DB, check_same_thread=False)
+
+
+# ✅ INIT DATABASE
 def init_db():
-    conn = sqlite3.connect(DB)
+    conn = get_db()
     c = conn.cursor()
 
     c.execute("""
@@ -40,24 +48,42 @@ def init_db():
     )
     """)
 
+    # 🔥 INDEX for faster low-network queries
+    c.execute("CREATE INDEX IF NOT EXISTS idx_receiver ON messages(receiver)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_time ON messages(time)")
+
     conn.commit()
     conn.close()
 
+
 init_db()
 
-def get_db():
-    return sqlite3.connect(DB)
+
+# 🔥 AUTO DELETE (older than 5 hours)
+def cleanup():
+    conn = get_db()
+    c = conn.cursor()
+
+    now = int(time.time())
+    expiry = now - 18000  # 5 hours
+
+    c.execute("DELETE FROM messages WHERE time < ?", (expiry,))
+
+    conn.commit()
+    conn.close()
 
 
-# ✅ SEND
+# ✅ SEND MESSAGE
 @app.post("/s")
 def send(msg: Message):
+    cleanup()
+
     conn = get_db()
     c = conn.cursor()
 
     c.execute(
         "INSERT INTO messages (sender, receiver, msg, time) VALUES (?, ?, ?, ?)",
-        (msg.s, msg.r, msg.m[:50], msg.t)  # limit size 🔥
+        (msg.s, msg.r, msg.m[:40], msg.t)  # limit size 🔥
     )
 
     conn.commit()
@@ -66,15 +92,21 @@ def send(msg: Message):
     return {"ok": 1}
 
 
-# ✅ RECEIVE ONLY NEW MESSAGES
+# ✅ RECEIVE ONLY NEW MESSAGES (LOW DATA)
 @app.get("/r/{user}/{last_id}")
 def receive(user: str, last_id: int):
+    cleanup()
+
     conn = get_db()
     c = conn.cursor()
 
     c.execute(
-        "SELECT id, sender, msg, time FROM messages WHERE receiver=? AND id>?",
-        (user, last_id)
+        """
+        SELECT id, sender, msg, time 
+        FROM messages 
+        WHERE id > ? AND (sender = ? OR receiver = ?)
+        """,
+        (last_id, user, user)
     )
 
     data = c.fetchall()
@@ -83,12 +115,13 @@ def receive(user: str, last_id: int):
     return data
 
 
+# ✅ HEALTH CHECK
 @app.get("/")
 def home():
     return {"status": "running"}
 
 
-# ✅ RENDER PORT
+# ✅ RENDER COMPATIBLE RUN
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 10000))
