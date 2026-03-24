@@ -1,4 +1,4 @@
-const API = "http://192.168.31.71:8000";
+const API = "https://ultra-chat-frontend.onrender.com";
 
 // SEND MESSAGE
 function send() {
