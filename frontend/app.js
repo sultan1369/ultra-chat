@@ -2,20 +2,28 @@ const API = "https://ultra-chat-backend-4ka5.onrender.com";
 
 // 🔄 STATE
 let lastId = 0;
-let interval = 5000;
-let queue = []; // offline queue
+let interval = 3000;
+let queue = [];
 
-// 🔔 REQUEST NOTIFICATION PERMISSION
-if ("Notification" in window && Notification.permission !== "granted") {
-  Notification.requestPermission();
-}
+// 🔔 REQUEST NOTIFICATION PERMISSION (ON USER CLICK)
+document.body.addEventListener("click", () => {
+  if ("Notification" in window && Notification.permission !== "granted") {
+    Notification.requestPermission();
+  }
 
-// 🔥 REGISTER SERVICE WORKER (PWA)
+  // 🔊 unlock audio (important for mobile)
+  const audio = document.getElementById("ping");
+  if (audio) {
+    audio.play().then(() => audio.pause()).catch(() => {});
+  }
+}, { once: true });
+
+// 🔥 REGISTER SERVICE WORKER
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("sw.js");
 }
 
-// 🔔 PRIVACY NOTIFICATION (no message content)
+// 🔔 PRIVACY NOTIFICATION
 function notify() {
   if (Notification.permission === "granted") {
     new Notification("New Message");
@@ -28,7 +36,7 @@ function playSound() {
   if (audio) audio.play().catch(() => {});
 }
 
-// 📤 SEND MESSAGE (WITH OFFLINE SUPPORT)
+// 📤 SEND MESSAGE (WITH OFFLINE QUEUE)
 function send() {
   const user = document.getElementById("user").value;
   const msgInput = document.getElementById("msg");
@@ -39,7 +47,7 @@ function send() {
   const data = {
     s: user,
     r: user === "S" ? "F" : "S",
-    m: msg.slice(0, 40), // ultra small payload
+    m: msg.slice(0, 40),
     t: Math.floor(Date.now() / 1000)
   };
 
@@ -48,11 +56,10 @@ function send() {
 
   msgInput.value = "";
 
-  // try send immediately
   trySendQueue();
 }
 
-// 🔁 TRY SEND QUEUE (LOW NETWORK SAFE)
+// 🔁 SEND QUEUE (LOW NETWORK SAFE)
 function trySendQueue() {
   if (!navigator.onLine || queue.length === 0) return;
 
@@ -65,48 +72,47 @@ function trySendQueue() {
   })
   .then(res => {
     if (res.ok) {
-      queue.shift(); // remove sent message
-      trySendQueue(); // send next
+      queue.shift();
+      trySendQueue();
     }
   })
-  .catch(() => {
-    // keep in queue, retry later
-  });
+  .catch(() => {});
 }
 
-// 📥 FETCH ONLY NEW MESSAGES (ADAPTIVE)
+// 📥 FETCH MESSAGES (FIXED INITIAL LOAD)
 function fetchMessages() {
   const user = document.getElementById("user").value;
 
-  fetch(`${API}/r/${user}/${lastId}`)
+  const startId = lastId === 0 ? -1 : lastId;
+
+  fetch(`${API}/r/${user}/${startId}`)
     .then(res => res.ok ? res.json() : [])
     .then(data => {
-
-      if (data.length > 0) {
-        playSound();
-        notify();
-        interval = 3000; // faster when active
-      } else {
-        interval = 8000; // slower when idle
-      }
 
       data.forEach(m => {
         lastId = m[0];
         render(m);
+
+        // 🔔 notify only if message from other user
+        if (m[1] !== user) {
+          playSound();
+          notify();
+        }
       });
 
-      // retry sending queued messages
+      // 🔄 adaptive polling
+      interval = data.length > 0 ? 3000 : 8000;
+
       trySendQueue();
 
       setTimeout(fetchMessages, interval);
     })
     .catch(() => {
-      // network weak → retry slowly
       setTimeout(fetchMessages, 10000);
     });
 }
 
-// 🧱 RENDER MESSAGE (LEFT/RIGHT LOGIC)
+// 🧱 RENDER MESSAGE (LEFT/RIGHT)
 function render(m) {
   const chat = document.getElementById("chat");
   const current = document.getElementById("user").value;
@@ -119,12 +125,11 @@ function render(m) {
 
   const time = document.createElement("div");
   time.className = "time";
-  time.innerText = new Date(m[3] * 1000)
-    .toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit"
-    });
+  time.innerText = new Date(m[3] * 1000).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  });
 
   div.appendChild(text);
   div.appendChild(time);
@@ -133,8 +138,14 @@ function render(m) {
   chat.scrollTop = chat.scrollHeight;
 }
 
-// 📶 NETWORK CHANGE HANDLING
+// 🔄 RESET WHEN USER CHANGES
+document.getElementById("user").addEventListener("change", () => {
+  lastId = 0;
+  document.getElementById("chat").innerHTML = "";
+});
+
+// 📶 NETWORK RECOVERY
 window.addEventListener("online", trySendQueue);
 
-// 🔄 START SYSTEM
+// 🚀 START APP
 fetchMessages();
