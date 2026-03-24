@@ -5,7 +5,7 @@ let lastId = 0;
 let interval = 5000;
 let queue = [];
 let isHidden = false;
-let isInitialLoad = true; // 🔥 NEW
+let isInitialLoad = true;
 
 // 🔔 PERMISSION + AUDIO UNLOCK
 document.body.addEventListener("click", () => {
@@ -49,7 +49,7 @@ function playSound() {
   if (audio) audio.play().catch(() => {});
 }
 
-// 📤 SEND
+// 📤 SEND MESSAGE (WITH STATUS)
 function send() {
   const user = document.getElementById("user").value;
   const msgInput = document.getElementById("msg");
@@ -57,12 +57,19 @@ function send() {
 
   if (!msg) return;
 
+  const timestamp = Math.floor(Date.now() / 1000);
+  const id = "local_" + Date.now(); // local ID
+
   const data = {
+    id: id,
     s: user,
     r: user === "S" ? "F" : "S",
     m: msg.slice(0, 40),
-    t: Math.floor(Date.now() / 1000)
+    t: timestamp
   };
+
+  // 🔥 render instantly
+  renderLocal(data);
 
   queue.push(data);
   msgInput.value = "";
@@ -70,7 +77,7 @@ function send() {
   trySendQueue();
 }
 
-// 🔁 QUEUE SEND
+// 🔁 SEND QUEUE
 function trySendQueue() {
   if (!navigator.onLine || queue.length === 0) return;
 
@@ -83,6 +90,7 @@ function trySendQueue() {
   })
   .then(res => {
     if (res.ok) {
+      updateStatus(item.id, "✓"); // sent
       queue.shift();
       trySendQueue();
     }
@@ -93,7 +101,6 @@ function trySendQueue() {
 // 📥 FETCH
 function fetchMessages() {
   const user = document.getElementById("user").value;
-
   const startId = isInitialLoad ? -1 : lastId;
 
   fetch(`${API}/r/${user}/${startId}`)
@@ -101,27 +108,23 @@ function fetchMessages() {
     .then(data => {
 
       if (isInitialLoad) {
-        // 🔥 FAST LOAD ALL MESSAGES
         document.getElementById("chat").innerHTML = "";
-
-        data.forEach(m => {
-          lastId = m[0];
-          render(m);
-        });
-
         isInitialLoad = false;
-      } else {
-        // 🔵 LIVE MODE
-        data.forEach(m => {
-          lastId = m[0];
-          render(m);
-
-          if (m[1] !== user) {
-            playSound();
-            if (isHidden) notifySW();
-          }
-        });
       }
+
+      data.forEach(m => {
+        lastId = m[0];
+
+        // avoid duplicate local messages
+        if (!document.getElementById("msg_" + m[0])) {
+          renderServer(m);
+        }
+
+        if (m[1] !== user) {
+          playSound();
+          if (isHidden) notifySW();
+        }
+      });
 
       interval = data.length > 0 ? 3000 : 8000;
 
@@ -129,41 +132,62 @@ function fetchMessages() {
 
       setTimeout(fetchMessages, interval);
     })
-    .catch(() => {
-      setTimeout(fetchMessages, 10000);
-    });
+    .catch(() => setTimeout(fetchMessages, 10000));
 }
 
-// 🧱 RENDER
-function render(m) {
+// 🧱 LOCAL RENDER (SENDING)
+function renderLocal(m) {
   const chat = document.getElementById("chat");
-  const current = document.getElementById("user").value;
 
   const div = document.createElement("div");
-  div.className = "msg " + (m[1] === current ? "s" : "f");
+  div.className = "msg s";
+  div.id = m.id;
 
-  const text = document.createElement("div");
-  text.innerText = m[2];
-
-  const time = document.createElement("div");
-  time.className = "time";
-  time.innerText = new Date(m[3] * 1000).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit"
-  });
-
-  div.appendChild(text);
-  div.appendChild(time);
+  div.innerHTML = `
+    ${m.m}
+    <div class="time">
+      ${new Date(m.t * 1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'})}
+      <span class="status">⏳</span>
+    </div>
+  `;
 
   chat.appendChild(div);
   chat.scrollTop = chat.scrollHeight;
 }
 
-// 🔄 USER SWITCH FIX
+// 🧱 SERVER RENDER
+function renderServer(m) {
+  const chat = document.getElementById("chat");
+  const current = document.getElementById("user").value;
+
+  const div = document.createElement("div");
+  div.className = "msg " + (m[1] === current ? "s" : "f");
+  div.id = "msg_" + m[0];
+
+  div.innerHTML = `
+    ${m[2]}
+    <div class="time">
+      ${new Date(m[3]*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'})}
+    </div>
+  `;
+
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+// 🔄 UPDATE STATUS
+function updateStatus(id, status) {
+  const el = document.getElementById(id);
+  if (el) {
+    const span = el.querySelector(".status");
+    if (span) span.innerText = status;
+  }
+}
+
+// 🔄 USER SWITCH
 document.getElementById("user").addEventListener("change", () => {
   lastId = 0;
-  isInitialLoad = true; // 🔥 important
+  isInitialLoad = true;
   document.getElementById("chat").innerHTML = "";
 });
 
